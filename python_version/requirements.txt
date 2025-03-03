@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+openai
+twilio
+python-decouple
+sqlalchemy
+psycopg2-binary
+python-multipart
+pyngrok
+pydub
+requests
