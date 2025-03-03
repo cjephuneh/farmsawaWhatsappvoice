@@ -43,9 +43,15 @@ app.post('/whatsapp/voice', async (req, res) => {
 
     // Convert AI response to speech and send as a voice message
     const twilioResponse = new twilio.twiml.VoiceResponse();
-    twilioResponse.say(aiResponse);
 
-    // Respond with the voice message
+    // Convert the AI response text to speech using <Say>
+    twilioResponse.say(aiResponse, { voice: 'alice', language: 'en-US' });
+
+    // Respond with the voice message (sending both text and voice responses)
+    // Send text message back to WhatsApp
+    sendWhatsAppTextResponse(aiResponse, req.body.From);
+
+    // Send voice message back
     res.type('text/xml').send(twilioResponse.toString());
   } catch (error) {
     console.error('Error processing voice message:', error);
@@ -87,6 +93,20 @@ async function generateAIResponse(text) {
   } catch (error) {
     console.error('Error generating AI response:', error);
     throw new Error('Failed to generate AI response');
+  }
+}
+
+// Function to send text response to WhatsApp user
+async function sendWhatsAppTextResponse(aiResponse, toPhoneNumber) {
+  try {
+    await client.messages.create({
+      body: aiResponse,  // Send the text response
+      from: `whatsapp:${twilioPhoneNumber}`,  // Your Twilio WhatsApp number
+      to: `whatsapp:${toPhoneNumber}`,  // The phone number that sent the message
+    });
+    console.log('Text response sent to WhatsApp');
+  } catch (error) {
+    console.error('Error sending text response:', error);
   }
 }
 
