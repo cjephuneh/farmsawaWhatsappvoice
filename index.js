@@ -1,8 +1,12 @@
 const express = require('express');
 const twilio = require('twilio');
 const bodyParser = require('body-parser');
-const { OpenAI } = require('openai');  // Corrected import
+const { OpenAI } = require('openai');
+const axios = require('axios');
+const path = require('path');
+const fs = require('fs');
 require('dotenv').config();
+
 
 const app = express();
 
@@ -25,48 +29,112 @@ const openai = new OpenAI({
 
 // Route to handle incoming WhatsApp voice messages
 app.post('/whatsapp/voice', async (req, res) => {
-    console.log('Headers:', req.headers);
-    console.log('Body:', req.body);
-    console.log('Query:', req.query);
-    
-    // Add request body validation
-    if (!req.body || Object.keys(req.body).length === 0) {
-        console.log('Empty request body received');
-        return res.status(400).send('Empty request body');
-    }
-    
-    console.log(req.body);  // Log incoming request body
     try {
-      const recordingUrl = req.body.RecordingUrl;
-      const recordingDuration = req.body.RecordingDuration;
-  
-      if (!recordingUrl) {
-        return res.status(400).send('No voice recording received.');
-      }
-  
-      // Get transcription from Twilio's speech recognition
-      const transcriptionText = await getTranscription(recordingUrl);
-  
-      // Send transcribed text to OpenAI to generate a response
-      const aiResponse = await generateAIResponse(transcriptionText);
-  
-      // Convert AI response to speech and send as a voice message
-      const twilioResponse = new twilio.twiml.VoiceResponse();
-  
-      // Convert the AI response text to speech using <Say>
-      twilioResponse.say(aiResponse, { voice: 'alice', language: 'en-US' });
-  
-      // Respond with the voice message (sending both text and voice responses)
-      sendWhatsAppTextResponse(aiResponse, req.body.From);
-  
-      // Send voice message back
-      res.type('text/xml').send(twilioResponse.toString());
+        console.log('Incoming request:', {
+            messageType: req.body.MessageType,
+            hasMedia: req.body.NumMedia !== '0',
+            from: req.body.From
+        });
+
+        // Handle button messages
+        if (req.body.MessageType === 'button') {
+            const completion = await openai.chat.completions.create({
+                model: "gpt-3.5-turbo",
+                messages: [
+                    { role: "system", content: "You're an English teacher." },
+                    { role: "user", content: `User clicked: ${req.body.ButtonText}` }
+                ]
+            });
+
+            await client.messages.create({
+                body: completion.choices[0].message.content,
+                from: `whatsapp:${process.env.TWILIO_PHONE_NUMBER}`,
+                to: req.body.From
+            });
+
+            return res.status(200).send();
+        }
+
+        // Handle voice messages
+        if (req.body.MessageType === 'audio' && req.body.MediaUrl0) {
+            const audioResponse = await axios.get(req.body.MediaUrl0, {
+                responseType: 'arraybuffer',
+                auth: {
+                    username: process.env.TWILIO_ACCOUNT_SID,
+                    password: process.env.TWILIO_AUTH_TOKEN
+                },
+                headers: {
+                    'Content-Type': req.body.MediaContentType0
+                }
+            });
+
+            const tempDir = path.join(__dirname, 'temp');
+            if (!fs.existsSync(tempDir)) {
+                fs.mkdirSync(tempDir);
+            }
+
+            const tempFile = path.join(tempDir, `temp-${Date.now()}.ogg`);
+            fs.writeFileSync(tempFile, audioResponse.data);
+
+            const transcript = await openai.audio.transcriptions.create({
+                file: fs.createReadStream(tempFile),
+                model: "whisper-1"
+            });
+
+            const completion = await openai.chat.completions.create({
+                model: "gpt-3.5-turbo",
+                messages: [
+                    { role: "system", content: "Your name is farmsawa. You're an ai farm assistant you answer user questions about farm stuff users can ask questions in kiswahili and give them responses in either kiswahili or english based on what they have asked be creative and add more engagind Agriculture stuff ." },
+                    { role: "user", content: transcript.text }
+                ]
+            });
+
+            await client.messages.create({
+                body: completion.choices[0].message.content,
+                from: `whatsapp:${process.env.TWILIO_PHONE_NUMBER}`,
+                to: req.body.From
+            });
+
+            fs.unlinkSync(tempFile);
+            return res.status(200).send();
+        }
+
+        // Handle text messages
+        if (req.body.Body) {
+            const completion = await openai.chat.completions.create({
+                model: "gpt-3.5-turbo",
+                messages: [
+                    { role: "system", content: "You're an English teacher." },
+                    { role: "user", content: req.body.Body }
+                ]
+            });
+
+            await client.messages.create({
+                body: completion.choices[0].message.content,
+                from: `whatsapp:${process.env.TWILIO_PHONE_NUMBER}`,
+                to: req.body.From
+            });
+
+            return res.status(200).send();
+        }
+
+        return res.status(400).json({ 
+            error: 'Unsupported message type',
+            received: {
+                type: req.body.MessageType,
+                hasMedia: req.body.NumMedia !== '0'
+            }
+        });
+
     } catch (error) {
-      console.error('Error processing voice message:', error);
-      res.status(500).send('Internal Server Error');
+        console.error('Error processing message:', error);
+        res.status(500).json({ error: error.message });
     }
-  });
+});
   
+app.get('/', (req, res) => {
+    res.send('WhatsApp Voice Assistant API');
+});
 
 // Function to get transcription from Twilio (using their recording URL)
 async function getTranscription(recordingUrl) {
